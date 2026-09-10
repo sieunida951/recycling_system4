@@ -1996,4 +1996,452 @@ errorText =
 "사용할 수 있는 카메라를 찾을 수 없습니다. 카메라가 연결되어 있는지 확인해주세요.";
 } else if (
 location.protocol !== "https:" &&
-l
+location.hostname !== "localhost"
+) {
+errorText =
+"카메라는 HTTPS 환경에서 사용할 수 있습니다. GitHub Pages처럼 HTTPS로 열린 페이지에서 다시 실행해주세요.";
+}
+
+showMessage(
+errorText,
+true
+);
+}
+}
+
+
+/* =========================================================
+11. 카메라 예측 반복
+========================================================= */
+
+async function predictCamera() {
+
+if (
+!cameraRunning ||
+!predictionRunning ||
+!webcam ||
+!model
+) {
+return;
+}
+
+try {
+
+webcam.update();
+
+const context =
+cameraCanvas.getContext("2d");
+
+context.drawImage(
+webcam.canvas,
+0,
+0,
+cameraCanvas.width,
+cameraCanvas.height
+);
+
+/*
+* 웹캠 캔버스를 model.predict()에 넣습니다.
+*/
+const predictions =
+await model.predict(cameraCanvas);
+
+updatePredictions(predictions);
+
+} catch (error) {
+
+console.error(error);
+
+await stopCamera();
+
+showMessage(
+"카메라 영상을 분류하는 중 문제가 발생했습니다. 카메라를 다시 시작해주세요.",
+true
+);
+
+return;
+}
+
+/*
+* requestAnimationFrame을 사용해
+* 카메라 예측을 반복합니다.
+*/
+if (cameraRunning && predictionRunning) {
+
+animationFrameId =
+requestAnimationFrame(predictCamera);
+}
+}
+
+
+/* =========================================================
+12. 카메라 중지
+========================================================= */
+
+async function stopCamera() {
+
+cameraRunning = false;
+predictionRunning = false;
+
+if (animationFrameId !== null) {
+
+cancelAnimationFrame(
+animationFrameId
+);
+
+animationFrameId = null;
+}
+
+if (webcam) {
+
+try {
+webcam.stop();
+} catch (error) {
+console.warn(
+"카메라 종료 중 오류:",
+error
+);
+}
+
+webcam = null;
+}
+
+cameraCanvas.style.display =
+"none";
+
+cameraPlaceholder.style.display =
+"block";
+
+startCameraButton.disabled =
+!model;
+
+stopCameraButton.disabled =
+true;
+}
+
+
+/* =========================================================
+13. 이미지 파일 선택
+========================================================= */
+
+imageInput.addEventListener(
+"change",
+handleImageUpload
+);
+
+
+async function handleImageUpload(event) {
+
+// 파일이 없으면 아무것도 하지 않습니다.
+const file =
+event.target.files &&
+event.target.files[0];
+
+if (!file) {
+return;
+}
+
+// 업로드 시 기존 카메라를 먼저 종료합니다.
+await stopCamera();
+
+clearMessage();
+
+/*
+* 이미지 파일인지 확인합니다.
+*/
+if (!file.type.startsWith("image/")) {
+
+showMessage(
+"이미지 파일만 선택할 수 있습니다. JPG, PNG 등의 이미지 파일을 선택해주세요.",
+true
+);
+
+imageInput.value = "";
+return;
+}
+
+
+/*
+* 이전 Object URL을 먼저 정리합니다.
+*/
+clearUploadedImage();
+
+
+/*
+* 브라우저에서만 파일을 읽기 위해
+* Object URL을 생성합니다.
+*/
+currentObjectURL =
+URL.createObjectURL(file);
+
+
+uploadedImage.src =
+currentObjectURL;
+
+
+/*
+* 이미지가 실제로 읽히는지 확인합니다.
+*/
+uploadedImage.onload =
+async function() {
+
+uploadedImage.style.display =
+"block";
+
+uploadPlaceholder.style.display =
+"none";
+
+try {
+
+/*
+* HTMLImageElement 자체를
+* model.predict()에 전달합니다.
+*/
+const predictions =
+await model.predict(
+uploadedImage
+);
+
+updatePredictions(predictions);
+
+showMessage(
+"이미지를 브라우저 안에서 분류했습니다. 이미지가 서버에 업로드되거나 저장되지는 않습니다.",
+false,
+true
+);
+
+} catch (error) {
+
+console.error(error);
+
+showMessage(
+"이미지를 분류하지 못했습니다. 다른 이미지 파일을 선택해 다시 시도해주세요.",
+true
+);
+}
+};
+
+
+uploadedImage.onerror =
+function() {
+
+clearUploadedImage();
+
+showMessage(
+"이미지를 읽을 수 없습니다. 파일이 손상되지 않았는지 확인하고 다른 이미지 파일을 선택해주세요.",
+true
+);
+};
+}
+
+
+/* =========================================================
+14. 업로드 이미지 정리
+========================================================= */
+
+function clearUploadedImage() {
+
+uploadedImage.onload = null;
+uploadedImage.onerror = null;
+
+uploadedImage.removeAttribute("src");
+
+uploadedImage.style.display =
+"none";
+
+uploadPlaceholder.style.display =
+"block";
+
+/*
+* 더 이상 사용하지 않는 Object URL을 해제합니다.
+*/
+if (currentObjectURL) {
+
+URL.revokeObjectURL(
+currentObjectURL
+);
+
+currentObjectURL = null;
+}
+}
+
+
+/* =========================================================
+15. 예측 결과 업데이트
+---------------------------------------------------------
+카메라와 업로드 이미지 모두
+이 함수를 사용하므로 결과 UI가 동일합니다.
+========================================================= */
+
+function updatePredictions(predictions) {
+
+if (
+!predictions ||
+predictions.length === 0
+) {
+return;
+}
+
+
+/*
+* 가장 높은 확률을 찾습니다.
+*/
+let highestPrediction =
+predictions[0];
+
+predictions.forEach(function(prediction) {
+
+if (
+prediction.probability >
+highestPrediction.probability
+) {
+highestPrediction =
+prediction;
+}
+});
+
+
+/*
+* 가장 높은 결과를 크게 표시합니다.
+*/
+predictionName.textContent =
+highestPrediction.className;
+
+predictionConfidence.textContent =
+"확률 " +
+formatPercent(
+highestPrediction.probability
+);
+
+
+/*
+* 클래스별 확률 막대를 업데이트합니다.
+*/
+predictions.forEach(function(prediction, index) {
+
+const percent =
+Math.max(
+0,
+Math.min(
+100,
+prediction.probability * 100
+)
+);
+
+const bar =
+document.getElementById(
+"prediction-bar-" + index
+);
+
+const percentText =
+document.getElementById(
+"prediction-percent-" + index
+);
+
+/*
+* 실제 모델의 className과
+* 메타데이터 순서를 사용합니다.
+*/
+if (bar) {
+bar.style.width =
+percent.toFixed(1) + "%";
+}
+
+if (percentText) {
+percentText.textContent =
+percent.toFixed(1) + "%";
+}
+});
+}
+
+
+/* =========================================================
+16. 확률 표시
+========================================================= */
+
+function formatPercent(probability) {
+
+const percent =
+Math.max(
+0,
+Math.min(
+100,
+probability * 100
+)
+);
+
+return percent.toFixed(1) + "%";
+}
+
+
+/* =========================================================
+17. 메시지 표시
+========================================================= */
+
+function showMessage(
+text,
+isError = false,
+isSuccess = false
+) {
+
+message.textContent = text;
+
+message.className =
+"message show";
+
+if (isError) {
+message.classList.add("error");
+}
+
+if (isSuccess) {
+message.classList.add("success");
+}
+}
+
+
+function clearMessage() {
+
+message.textContent = "";
+message.className = "message";
+}
+
+
+/* =========================================================
+18. 페이지를 떠날 때 카메라와 Object URL 정리
+========================================================= */
+
+window.addEventListener(
+"beforeunload",
+function() {
+
+predictionRunning = false;
+cameraRunning = false;
+
+if (animationFrameId !== null) {
+cancelAnimationFrame(
+animationFrameId
+);
+}
+
+if (webcam) {
+
+try {
+webcam.stop();
+} catch (error) {
+console.warn(error);
+}
+}
+
+if (currentObjectURL) {
+
+URL.revokeObjectURL(
+currentObjectURL
+);
+}
+}
+);
+
+</script>
+
+</body>
+</html>
